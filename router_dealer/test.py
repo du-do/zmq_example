@@ -4,6 +4,7 @@
 '''
 ROUTER-DEALER 路由
 ROUTER 将消息发送给指定的DEALER，DEALER不需要处理信封
+DEALER 给 ROUTER发送消息时，不需要带id，ROUTER收到DEALER发的消息会自动填充上DEALER的ID
 '''
 
 
@@ -12,12 +13,11 @@ import time
 import threading
 
 
-def task_a():
-    ctx = zmq.Context.instance()
+def task_a(ctx):
     worker  = ctx.socket(zmq.DEALER)
     # 为套接字添加认证信息
     worker.setsockopt_string(zmq.IDENTITY, 'A')
-    worker.connect("ipc://routing.ipc")
+    worker.connect("inproc://routing.ipc")
 
     total = 0
     while True:
@@ -28,16 +28,16 @@ def task_a():
             print('task a total:%d' % total)
             break
         total += 1
-    
+    # 结束前给 ROUTER 发一条消息，不需要设置信封
+    worker.send_multipart([b'', b'this msg send to router'])
+    time.sleep(5)
     worker.close()
-    ctx.term()
 
-def task_b():
-    ctx = zmq.Context.instance()
+def task_b(ctx):
     worker  = ctx.socket(zmq.DEALER)
     # 为套接字添加认证信息
     worker.setsockopt_string(zmq.IDENTITY, 'B')
-    worker.connect("ipc://routing.ipc")
+    worker.connect("inproc://routing.ipc")
 
     total = 0
     while True:
@@ -48,17 +48,15 @@ def task_b():
             print('task b total:%d' % total)
             break
         total += 1
-    
     worker.close()
-    ctx.term()
 
 if __name__ == "__main__":
     ctx = zmq.Context.instance()
     router  = ctx.socket(zmq.ROUTER)
-    router.bind("ipc://routing.ipc")
-
-    task_a = threading.Thread(target=task_a)
-    task_b = threading.Thread(target=task_b)
+    router.bind("inproc://routing.ipc")
+    router.setsockopt_string(zmq.IDENTITY, 'c')
+    task_a = threading.Thread(target=task_a, args=(ctx,))
+    task_b = threading.Thread(target=task_b, args=(ctx,))
 
     task_a.start()
     task_b.start()
@@ -78,7 +76,6 @@ if __name__ == "__main__":
 
         msg[0] = b'B'
         router.send_multipart(msg)
-
     # 准备结束消息
     msg[2] = b'END'
 
@@ -86,6 +83,9 @@ if __name__ == "__main__":
     router.send_multipart(msg)
     msg[0] = b'B'
     router.send_multipart(msg)
+    # 接收task a 发的消息
+    msg = router.recv_multipart()
+    print("router get msg {}".format(msg))
 
     task_a.join()
     task_b.join()
